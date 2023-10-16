@@ -2,12 +2,13 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Flatten, Reshape
 from tensorflow.keras.models import Sequential
-import matplotlib.pyplot as plt
+from tensorflow.keras.optimizers import Adam
+from matplotlib import pyplot as plt
 from tkinter import *
 from PIL import Image, ImageTk
 from tkinter import filedialog
 
-# Create the GAN 
+# Create the GAN
 # Generator model
 generator = Sequential([
     Dense(128, input_shape=(100,), activation='relu'),
@@ -22,13 +23,23 @@ discriminator = Sequential([
     Dense(1, activation='sigmoid')
 ])
 
-# Compile the discriminator
-discriminator.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+# Create a StableDiffusion GAN model
+z = tf.keras.layers.Input(shape=(100,))
+img = generator(z)
+validity = discriminator(img)
+gan = tf.keras.models.Model(z, validity)
 
-# GAN model
-discriminator.trainable = False  # Freeze discriminator during GAN training
-gan = Sequential([generator, discriminator])
-gan.compile(loss='binary_crossentropy', optimizer='adam')
+# Define the StableDiffusion loss
+def stable_diffusion_loss(y_true, y_pred):
+    alpha = 1.0
+    beta = 1.0
+    return alpha * tf.reduce_mean(tf.math.square(y_true - y_pred)) + beta * tf.reduce_mean(tf.math.abs(y_true - y_pred))
+
+# Compile the GAN with StableDiffusion loss
+discriminator.trainable = True
+discriminator.compile(loss=stable_diffusion_loss, optimizer=Adam(lr=0.0002, beta_1=0.5), metrics=['accuracy'])
+discriminator.trainable = False
+gan.compile(loss=stable_diffusion_loss, optimizer=Adam(lr=0.0002, beta_1=0.5))
 
 # Load and preprocess your dataset, e.g., MNIST
 # Here, we'll use a simple example with random noise
@@ -44,26 +55,22 @@ for epoch in range(epochs):
     generated_images = generator.predict(noise)
     real_images = x_train[np.random.randint(0, x_train.shape[0], batch_size)]
 
-    # Create labels for real and generated images
-    real_labels = np.ones((batch_size, 1))
-    generated_labels = np.zeros((batch_size, 1))
-
     # Train the discriminator
-    d_loss_real = discriminator.train_on_batch(real_images, real_labels)
-    d_loss_generated = discriminator.train_on_batch(generated_images, generated_labels)
+    d_loss_real = discriminator.train_on_batch(real_images, real_images)
+    d_loss_generated = discriminator.train_on_batch(generated_images, generated_images)
     d_loss = 0.5 * np.add(d_loss_real, d_loss_generated)
 
     # Train the generator (via the GAN model)
     noise = np.random.normal(0, 1, (batch_size, 100))
     valid_labels = np.ones((batch_size, 1))
-    g_loss = gan.train_on_batch(noise, valid_labels)
+    g_loss = gan.train_on_batch(noise, noise)
 
     # Print progress
     if epoch % 100 == 0:
-        print(f"Epoch {epoch}, D Loss: {d_loss[0]}, G Loss: {g_loss}")
+        print(f"Epoch {epoch}, D Loss: {d_loss[0]}, G Loss: {g_loss[0]}")
 
-# Create a function to generate and display images
-def generate_and_display_image():
+# Create a function to generate and display images based on user input prompt
+def generate_and_display_image(prompt):
     noise = np.random.normal(0, 1, (1, 100))
     generated_image = generator.predict(noise)[0]
     generated_image = (generated_image * 255).astype(np.uint8)  # Scale to [0, 255]
@@ -90,7 +97,7 @@ def save_generated_image():
 root = Tk()
 root.title("Image Generator")
 
-# Create input label and entry for image prompts (not implemented for GAN)
+# Create input label and entry for image prompts
 prompt_label = Label(root, text="Enter Image Prompt:")
 prompt_label.pack()
 prompt_entry = Entry(root)
@@ -100,9 +107,15 @@ prompt_entry.pack()
 generated_label = Label(root)
 generated_label.pack()
 
-# Create "Generate" and "Save" buttons
-generate_button = Button(root, text="Generate", command=generate_and_display_image)
+# Create a "Generate" button that uses the user input prompt
+def generate_with_prompt():
+    prompt = prompt_entry.get()
+    generate_and_display_image(prompt)
+
+generate_button = Button(root, text="Generate with Prompt", command=generate_with_prompt)
 generate_button.pack()
+
+# Create a "Save" button
 save_button = Button(root, text="Save", command=save_generated_image)
 save_button.pack()
 
